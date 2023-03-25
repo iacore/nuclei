@@ -222,8 +222,8 @@ impl AsyncRead for Handle<File> {
             loop {
                 match fut.as_mut().poll(cx)? {
                     Poll::Ready(n) => {
-                        *pos += n;
-                        break Poll::Ready(Ok(n));
+                        *pos += n as usize;
+                        break Poll::Ready(Ok(n as _));
                     }
                     _ => {}
                 }
@@ -248,14 +248,14 @@ impl AsyncBufRead for Handle<File> {
             let (bufp, pos) = store_file.bufpair();
 
             bufp.fill_buf(|buf| {
-                let fut = Processor::processor_read_file(&fd, buf, *pos);
+                let fut = Processor::processor_read_file(&fd, buf, *pos as _);
                 futures::pin_mut!(fut);
 
                 loop {
                     match fut.as_mut().poll(cx)? {
                         Poll::Ready(n) => {
-                            *pos += n;
-                            break Poll::Ready(Ok(n));
+                            *pos += n as usize;
+                            break Poll::Ready(Ok(n as _));
                         }
                         _ => {}
                     }
@@ -292,14 +292,14 @@ impl AsyncWrite for Handle<File> {
             .unwrap();
 
             let res = {
-                let fut = Processor::processor_write_file(&fd, data, *pos);
+                let fut = Processor::processor_write_file(&fd, data, *pos as _);
                 futures::pin_mut!(fut);
 
                 loop {
                     match fut.as_mut().poll(cx)? {
                         Poll::Ready(n) => {
-                            *pos += n;
-                            break Poll::Ready(Ok(n));
+                            *pos += n as usize;
+                            break Poll::Ready(Ok(n as _));
                         }
                         _ => {}
                     }

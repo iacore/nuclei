@@ -16,7 +16,8 @@ use crate::proactor::Proactor;
 
 use crate::syscore::shim_to_af_unix;
 use crate::Handle;
-use iou::{InetAddr, SockAddr, SockAddrStorage, SockFlag};
+use iou::registrar::{UringFd, UringReadBuf};
+use iou::sqe::{SockAddr, SockAddrStorage, SockFlag, OFlag, Mode};
 use std::ffi::CString;
 use std::io::{IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
@@ -43,52 +44,50 @@ impl Processor {
 
     pub(crate) async fn processor_open_at(path: impl AsRef<Path>) -> io::Result<usize> {
         let path = CString::new(path.as_ref().as_os_str().as_bytes()).expect("invalid path");
-        let path = path.as_ptr();
         let flags = libc::O_CLOEXEC | libc::O_RDONLY;
         let dfd = libc::AT_FDCWD;
 
         let cc = Proactor::get().inner().register_io(|sqe| unsafe {
-            let sqep = sqe.raw_mut();
-            uring_sys::io_uring_prep_openat(sqep, dfd, path, flags, 0o666);
+            // let sqep = sqe.raw_mut();
+            sqe.prep_openat(RawFd::from_raw_fd(dfd), &path, OFlag::O_CLOEXEC | OFlag::O_RDONLY, Mode::from_bits_truncate(0o666));
         })?;
 
-        let x = cc.await? as _;
+        let x = cc.await?;
         dbg!(x);
 
-        Ok(x)
+        Ok(x as _)
     }
 
     pub(crate) async fn processor_read_file(
         io: &RawFd,
         buf: &mut [u8],
-        offset: usize,
-    ) -> io::Result<usize> {
+        offset: u64,
+    ) -> io::Result<i32> {
         let cc = Proactor::get().inner().register_io(|sqe| unsafe {
             sqe.prep_read(*io, buf, offset);
         })?;
 
-        Ok(cc.await? as _)
+        Ok(cc.await?)
     }
 
     pub(crate) async fn processor_write_file(
         io: &RawFd,
         buf: &[u8],
-        offset: usize,
-    ) -> io::Result<usize> {
+        offset: u64,
+    ) -> io::Result<i32> {
         let cc = Proactor::get().inner().register_io(|sqe| unsafe {
             sqe.prep_write(*io, buf, offset);
         })?;
 
-        Ok(cc.await? as _)
+        Ok(cc.await?)
     }
 
     pub(crate) async fn processor_close_file(io: &RawFd) -> io::Result<usize> {
         let cc = Proactor::get().inner().register_io(|sqe| unsafe {
-            let mut sqep = sqe.raw_mut();
-            uring_sys::io_uring_prep_close(sqep, *io);
+sqe.prep_close( *io);
         })?;
 
-        Ok(cc.await? as _)
+        Ok(cc.await?)
     }
 
     pub(crate) async fn processor_file_size(
@@ -102,8 +101,7 @@ impl Processor {
         Proactor::get()
             .inner()
             .register_io(|sqe| unsafe {
-                let sqep = sqe.raw_mut();
-                uring_sys::io_uring_prep_statx(sqep, *io, &EMPTY, flags, mask, statx);
+sqe.prep_statx( *io, &EMPTY, flags, mask, statx);
             })?
             .await?;
 
@@ -113,12 +111,12 @@ impl Processor {
     pub(crate) async fn processor_read_vectored(
         io: &RawFd,
         bufs: &mut [IoSliceMut<'_>],
-    ) -> io::Result<usize> {
+    ) -> io::Result<u64> {
         let cc = Proactor::get().inner().register_io(|sqe| unsafe {
             sqe.prep_read_vectored(*io, bufs, 0);
         })?;
 
-        Ok(cc.await? as _)
+        Ok(cc.await?)
     }
 
     pub(crate) async fn processor_write_vectored(
@@ -129,7 +127,7 @@ impl Processor {
             sqe.prep_write_vectored(*io, bufs, 0);
         })?;
 
-        Ok(cc.await? as _)
+        Ok(cc.await?)
     }
 
     ///////////////////////////////////
@@ -143,8 +141,7 @@ impl Processor {
         let res = Proactor::get()
             .inner()
             .register_io(|sqe| unsafe {
-                let sqep = sqe.raw_mut();
-                uring_sys::io_uring_prep_send(sqep, fd, buf.as_ptr() as _, buf.len() as _, 0);
+sqe.prep_send( fd, buf.as_ptr() as _, buf.len() as _, 0);
             })?
             .await?;
 
@@ -169,9 +166,7 @@ impl Processor {
         let res = Proactor::get()
             .inner()
             .register_io(|sqe| unsafe {
-                let sqep = sqe.raw_mut();
-                uring_sys::io_uring_prep_recv(
-                    sqep as *mut _,
+sqe.prep_recv(
                     fd,
                     buf.as_ptr() as _,
                     buf.len() as _,
@@ -419,8 +414,7 @@ impl Processor {
         let res = Proactor::get()
             .inner()
             .register_io(|sqe| unsafe {
-                let sqep = sqe.raw_mut();
-                uring_sys::io_uring_prep_sendmsg(sqep, fd, &sendmsg as *const _ as *const _, 0);
+sqe.prep_sendmsg( fd, &sendmsg as *const _ as *const _, 0);
             })?
             .await?;
 
@@ -467,9 +461,7 @@ impl Processor {
         let res = Proactor::get()
             .inner()
             .register_io(|sqe| unsafe {
-                let sqep = sqe.raw_mut();
-                uring_sys::io_uring_prep_recvmsg(
-                    sqep,
+sqe.prep_recvmsg(
                     fd,
                     &mut recvmsg as *mut _ as *mut _,
                     flags as _,
@@ -527,7 +519,7 @@ impl Processor {
         // FIXME: (vcq): uring lib uses nix, i use socket2, conversions happens over libc.
         // Propose std conversion for nix.
         let nixsaddr = unsafe {
-            &iou::SockAddr::from_libc_sockaddr(sock.local_addr().unwrap().as_ptr()).unwrap()
+            &SockAddr::from(sock.local_addr().as_ptr()).unwrap()
         };
 
         let stream = sock.into_unix_stream();

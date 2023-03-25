@@ -1,8 +1,8 @@
 use core::mem::MaybeUninit;
 use futures::channel::oneshot;
 use iou::{
-    CompletionQueue, CompletionQueueEvent, IoUring, Registrar, SubmissionQueue,
-    SubmissionQueueEvent,
+    CompletionQueue, CQE, IoUring, Registrar, SubmissionQueue,
+    SQE,
 };
 use lever::sync::prelude::*;
 use pin_utils::unsafe_pinned;
@@ -175,16 +175,16 @@ impl SysProactor {
     fn submitter<T>(
         &self,
         sq: &mut SubmissionQueue<'_>,
-        mut ring_sub: impl FnMut(&mut SubmissionQueueEvent<'_>) -> T,
+        mut ring_sub: impl FnMut(&mut SQE<'_>) -> T,
     ) -> Option<T> {
         // dbg!("SUBMITTER");
-        let mut sqe = match sq.next_sqe() {
+        let mut sqe = match sq.prepare_sqe() {
             Some(sqe) => sqe,
             None => {
                 if sq.submit().is_err() {
                     return None;
                 }
-                sq.next_sqe()?
+                sq.prepare_sqe()?
             }
         };
 
@@ -193,7 +193,7 @@ impl SysProactor {
 
     pub(crate) fn register_io(
         &self,
-        mut io_submit: impl FnMut(&mut SubmissionQueueEvent<'_>),
+        mut io_submit: impl FnMut(&mut SQE<'_>),
     ) -> io::Result<CompletionChan> {
         // dbg!("REGISTER IO");
         let sub_comp = {
@@ -210,7 +210,7 @@ impl SysProactor {
 
                     // dbg!("SUBMITTER", id);
                     io_submit(sqe);
-                    sqe.set_user_data(id);
+                    unsafe { sqe.set_user_data(id); }
 
                     {
                         let mut subguard = self.submitters.lock();
@@ -281,10 +281,11 @@ impl SysProactor {
         Ok(acquired)
     }
 
-    fn cqe_completion(&self, mut acquired: usize, cqe: &CompletionQueueEvent) -> io::Result<()> {
-        if cqe.is_timeout() {
-            return Ok(());
-        }
+    fn cqe_completion(&self, mut acquired: usize, cqe: &CQE) -> io::Result<()> {
+        todo!("invalid function is_timeout");
+        // if cqe.is_timeout() {
+        //     return Ok(());
+        // }
 
         let udata = cqe.user_data();
         // TODO: (vcq): Propagation of this should be properly.
